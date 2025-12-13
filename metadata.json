@@ -1,0 +1,5 @@
+{
+  "name": "CompressorMonitorPi",
+  "description": "Wizualizacja parametrów kompresora śrubowego (Ciśnienie, Przepływ, Temperatura, Prąd) przeznaczona na Raspberry Pi z obsługą trybu Kiosk.",
+  "requestFramePermissions": []
+}
