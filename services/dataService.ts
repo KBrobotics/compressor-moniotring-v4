@@ -1,6 +1,7 @@
 import { CompressorTelemetry, ConnectionStatus } from '../types';
 
-type DataCallback = (data: CompressorTelemetry) => void;
+// Use Partial to allow sending just { "pressure": 7 } without sending all other fields
+type DataCallback = (data: Partial<CompressorTelemetry>) => void;
 type StatusCallback = (status: ConnectionStatus) => void;
 
 class WebSocketService {
@@ -35,12 +36,16 @@ class WebSocketService {
       this.ws.onmessage = (event) => {
         try {
           const parsedData = JSON.parse(event.data);
-          // Enhance data with local timestamp if not present or stale
-          const processedData: CompressorTelemetry = {
-            ...parsedData,
-            timestamp: parsedData.timestamp || Date.now()
-          };
-          this.notifyData(processedData);
+          
+          // Basic validation to ensure it is an object
+          if (typeof parsedData === 'object' && parsedData !== null) {
+             const processedData: Partial<CompressorTelemetry> = {
+                ...parsedData,
+                // Add timestamp if missing from source
+                timestamp: parsedData.timestamp || Date.now()
+             };
+             this.notifyData(processedData);
+          }
         } catch (error) {
           console.error('Error parsing WebSocket data:', error);
         }
@@ -103,7 +108,7 @@ class WebSocketService {
     };
   }
 
-  private notifyData(data: CompressorTelemetry) {
+  private notifyData(data: Partial<CompressorTelemetry>) {
     this.onDataCallbacks.forEach(cb => cb(data));
   }
 
