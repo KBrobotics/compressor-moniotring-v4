@@ -16,8 +16,21 @@ const IconGear = () => <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" 
 const MAX_HISTORY_POINTS = 50;
 const DEFAULT_WS_URL = 'ws://localhost:1880/ws/compressor';
 
+// Initial Empty State
+const INITIAL_DATA: CompressorTelemetry = {
+  timestamp: Date.now(),
+  pressure: undefined,
+  flow: undefined,
+  temperature: undefined,
+  power: undefined,
+  voltage: undefined,
+  current: undefined,
+  status: undefined,
+  totalHours: undefined
+};
+
 function App() {
-  const [data, setData] = useState<CompressorTelemetry | null>(null);
+  const [data, setData] = useState<CompressorTelemetry>(INITIAL_DATA);
   const [history, setHistory] = useState<CompressorTelemetry[]>([]);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isKioskActive, setIsKioskActive] = useState(true);
@@ -26,6 +39,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [wsUrl, setWsUrl] = useState<string>(() => localStorage.getItem('compressor_ws_url') || DEFAULT_WS_URL);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('DISCONNECTED');
+  const [lastDataReceivedTime, setLastDataReceivedTime] = useState<number>(0);
 
   // Clock Update
   useEffect(() => {
@@ -51,24 +65,36 @@ function App() {
       return;
     }
 
-    // Subscribe to status updates
     const unsubscribeStatus = dataService.subscribeStatus((status) => {
       setConnectionStatus(status);
     });
 
-    // Subscribe to data updates
-    const unsubscribeData = dataService.subscribeData((newData) => {
-      setData(newData);
-      setHistory(prev => {
-        const newHistory = [...prev, newData];
-        if (newHistory.length > MAX_HISTORY_POINTS) {
-          return newHistory.slice(newHistory.length - MAX_HISTORY_POINTS);
-        }
-        return newHistory;
+    const unsubscribeData = dataService.subscribeData((partialData) => {
+      setLastDataReceivedTime(Date.now());
+      
+      // MERGE LOGIC:
+      // We take the previous state and overwrite ONLY the keys that came in the new packet.
+      // This allows the PLC to send { pressure: 7.0 } without resetting temperature.
+      setData(prevData => {
+        const mergedData = {
+          ...prevData,
+          ...partialData,
+          timestamp: partialData.timestamp || Date.now() // Ensure timestamp is fresh
+        };
+        
+        // Update history with the merged snapshot
+        setHistory(prevHistory => {
+          const newHistory = [...prevHistory, mergedData];
+          if (newHistory.length > MAX_HISTORY_POINTS) {
+            return newHistory.slice(newHistory.length - MAX_HISTORY_POINTS);
+          }
+          return newHistory;
+        });
+
+        return mergedData;
       });
     });
 
-    // Connect
     dataService.connect(wsUrl);
 
     return () => {
@@ -117,6 +143,9 @@ function App() {
     }
   };
 
+  // Determine if we have at least SOME valid data to display
+  const hasAnyData = lastDataReceivedTime > 0;
+
   if (!isKioskActive) {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center text-gray-400 p-8 text-center">
@@ -137,7 +166,6 @@ function App() {
              Przeładuj stronę
           </button>
         </div>
-        <p className="mt-12 text-sm text-gray-600">Naciśnij F11, aby wyjść z trybu pełnoekranowego, lub Alt+F4, aby zamknąć przeglądarkę.</p>
       </div>
     );
   }
@@ -194,123 +222,117 @@ function App() {
       </header>
 
       {/* Main Content */}
-      {!data ? (
-        <div className="flex-1 flex flex-col items-center justify-center bg-industrial-800/50 rounded-lg border border-industrial-700 border-dashed">
-          <div className="text-industrial-accent animate-pulse text-xl font-mono mb-4">Oczekiwanie na dane...</div>
-          <div className="text-gray-500 text-sm">Sprawdź połączenie Node-RED lub konfigurację WebSocket.</div>
-          <button 
-            onClick={() => setShowSettings(true)}
-            className="mt-6 px-4 py-2 bg-industrial-700 hover:bg-industrial-600 rounded text-sm text-white transition-colors"
-          >
-            Sprawdź Ustawienia
-          </button>
-        </div>
-      ) : (
-        <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        
+        {/* Left Column: Visual & Status */}
+        <div className="lg:col-span-1 xl:col-span-1 flex flex-col gap-6">
+          {/* Always render visual, even if status is undefined */}
+          <CompressorVisual status={data.status} />
           
-          {/* Left Column: Visual & Status */}
-          <div className="lg:col-span-1 xl:col-span-1 flex flex-col gap-6">
-            <CompressorVisual status={data.status} />
-            
-            <div className="bg-industrial-800 p-4 rounded-lg border border-industrial-700 flex-1">
-              <h3 className="text-gray-400 text-sm font-semibold uppercase mb-4">Statystyki Pracy</h3>
-              <div className="space-y-4">
-                  <div className="flex justify-between border-b border-industrial-700 pb-2">
-                      <span className="text-gray-300">Całkowity czas:</span>
-                      <span className="font-mono text-industrial-accent">{data.totalHours.toFixed(1)} h</span>
-                  </div>
-                  <div className="flex justify-between border-b border-industrial-700 pb-2">
-                      <span className="text-gray-300">Serwis za:</span>
-                      <span className="font-mono text-industrial-warning">450 h</span>
-                  </div>
-                  <div className="mt-4 p-3 bg-industrial-900 rounded border border-industrial-700">
-                    <span className="text-xs text-gray-500 block mb-1">Ostatni Komunikat</span>
-                    <span className="text-sm text-white">{data.status === 'RUNNING' ? 'Parametry w normie.' : 'Wymagane sprawdzenie stanu.'}</span>
-                  </div>
-              </div>
+          <div className="bg-industrial-800 p-4 rounded-lg border border-industrial-700 flex-1">
+            <h3 className="text-gray-400 text-sm font-semibold uppercase mb-4">Statystyki Pracy</h3>
+            <div className="space-y-4">
+                <div className="flex justify-between border-b border-industrial-700 pb-2">
+                    <span className="text-gray-300">Całkowity czas:</span>
+                    <span className="font-mono text-industrial-accent">
+                      {data.totalHours !== undefined ? `${data.totalHours.toFixed(1)} h` : '---'}
+                    </span>
+                </div>
+                <div className="flex justify-between border-b border-industrial-700 pb-2">
+                    <span className="text-gray-300">Serwis za:</span>
+                    <span className="font-mono text-industrial-warning">450 h</span>
+                </div>
+                <div className="mt-4 p-3 bg-industrial-900 rounded border border-industrial-700">
+                  <span className="text-xs text-gray-500 block mb-1">Ostatni Komunikat</span>
+                  <span className="text-sm text-white">
+                    {!hasAnyData ? 'Oczekiwanie na dane PLC...' : 
+                     data.status === 'ALARM' ? 'WYKRYTO BŁĄD!' :
+                     data.status === 'RUNNING' ? 'System pracuje poprawnie.' : 'System w stanie spoczynku.'}
+                  </span>
+                </div>
             </div>
           </div>
+        </div>
 
-          {/* Center/Right: Metrics Grid */}
-          <div className="lg:col-span-2 xl:col-span-3 flex flex-col gap-6">
-              
-              {/* Primary Gauges Row */}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                <MetricCard 
-                  label={METRIC_LIMITS.pressure.label}
-                  value={data.pressure}
-                  unit={METRIC_LIMITS.pressure.unit}
-                  min={METRIC_LIMITS.pressure.min}
-                  max={METRIC_LIMITS.pressure.max}
-                  icon={<IconGauge />}
-                  warning={data.pressure > 13}
+        {/* Center/Right: Metrics Grid */}
+        <div className="lg:col-span-2 xl:col-span-3 flex flex-col gap-6">
+            
+            {/* Primary Gauges Row */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <MetricCard 
+                label={METRIC_LIMITS.pressure.label}
+                value={data.pressure}
+                unit={METRIC_LIMITS.pressure.unit}
+                min={METRIC_LIMITS.pressure.min}
+                max={METRIC_LIMITS.pressure.max}
+                icon={<IconGauge />}
+                warning={data.pressure !== undefined && data.pressure > 13}
+              />
+              <MetricCard 
+                label={METRIC_LIMITS.temperature.label}
+                value={data.temperature}
+                unit={METRIC_LIMITS.temperature.unit}
+                min={METRIC_LIMITS.temperature.min}
+                max={METRIC_LIMITS.temperature.max}
+                icon={<IconThermometer />}
+                warning={data.temperature !== undefined && data.temperature > 100}
+              />
+              <MetricCard 
+                label={METRIC_LIMITS.flow.label}
+                value={data.flow}
+                unit={METRIC_LIMITS.flow.unit}
+                min={METRIC_LIMITS.flow.min}
+                max={METRIC_LIMITS.flow.max}
+                icon={<IconWind />}
+              />
+            </div>
+
+            {/* Electrical Stats Row */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <MetricCard 
+                  label={METRIC_LIMITS.power.label}
+                  value={data.power}
+                  unit={METRIC_LIMITS.power.unit}
+                  min={METRIC_LIMITS.power.min}
+                  max={METRIC_LIMITS.power.max}
+                  icon={<IconZap />}
                 />
                 <MetricCard 
-                  label={METRIC_LIMITS.temperature.label}
-                  value={data.temperature}
-                  unit={METRIC_LIMITS.temperature.unit}
-                  min={METRIC_LIMITS.temperature.min}
-                  max={METRIC_LIMITS.temperature.max}
-                  icon={<IconThermometer />}
-                  warning={data.temperature > 100}
+                  label={METRIC_LIMITS.voltage.label}
+                  value={data.voltage}
+                  unit={METRIC_LIMITS.voltage.unit}
+                  min={METRIC_LIMITS.voltage.min}
+                  max={METRIC_LIMITS.voltage.max}
                 />
                 <MetricCard 
-                  label={METRIC_LIMITS.flow.label}
-                  value={data.flow}
-                  unit={METRIC_LIMITS.flow.unit}
-                  min={METRIC_LIMITS.flow.min}
-                  max={METRIC_LIMITS.flow.max}
-                  icon={<IconWind />}
+                  label={METRIC_LIMITS.current.label}
+                  value={data.current}
+                  unit={METRIC_LIMITS.current.unit}
+                  min={METRIC_LIMITS.current.min}
+                  max={METRIC_LIMITS.current.max}
                 />
-              </div>
+            </div>
 
-              {/* Electrical Stats Row */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <MetricCard 
-                    label={METRIC_LIMITS.power.label}
-                    value={data.power}
-                    unit={METRIC_LIMITS.power.unit}
-                    min={METRIC_LIMITS.power.min}
-                    max={METRIC_LIMITS.power.max}
-                    icon={<IconZap />}
-                  />
-                  <MetricCard 
-                    label={METRIC_LIMITS.voltage.label}
-                    value={data.voltage}
-                    unit={METRIC_LIMITS.voltage.unit}
-                    min={METRIC_LIMITS.voltage.min}
-                    max={METRIC_LIMITS.voltage.max}
-                  />
-                  <MetricCard 
-                    label={METRIC_LIMITS.current.label}
-                    value={data.current}
-                    unit={METRIC_LIMITS.current.unit}
-                    min={METRIC_LIMITS.current.min}
-                    max={METRIC_LIMITS.current.max}
-                  />
-              </div>
+            {/* Charts Row */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1 min-h-[250px]">
+                <HistoryChart 
+                  data={history} 
+                  dataKey="pressure" 
+                  color="#0ea5e9" 
+                  unit="bar"
+                  title="Historia Ciśnienia"
+                />
+                <HistoryChart 
+                  data={history} 
+                  dataKey="power" 
+                  color="#f59e0b" 
+                  unit="kW"
+                  title="Zużycie Energii"
+                />
+            </div>
 
-              {/* Charts Row */}
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 flex-1 min-h-[250px]">
-                  <HistoryChart 
-                    data={history} 
-                    dataKey="pressure" 
-                    color="#0ea5e9" 
-                    unit="bar"
-                    title="Historia Ciśnienia"
-                  />
-                  <HistoryChart 
-                    data={history} 
-                    dataKey="power" 
-                    color="#f59e0b" 
-                    unit="kW"
-                    title="Zużycie Energii"
-                  />
-              </div>
-
-          </div>
-        </main>
-      )}
+        </div>
+      </main>
     </div>
   );
 }
