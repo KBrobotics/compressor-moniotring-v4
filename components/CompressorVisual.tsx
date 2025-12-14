@@ -2,7 +2,7 @@ import React from 'react';
 import { CompressorTelemetry } from '../types';
 
 interface CompressorVisualProps {
-  status: CompressorTelemetry['status'];
+  status?: CompressorTelemetry['status'];
 }
 
 const CompressorVisual: React.FC<CompressorVisualProps> = ({ status }) => {
@@ -26,6 +26,11 @@ const CompressorVisual: React.FC<CompressorVisualProps> = ({ status }) => {
       statusColor = 'bg-industrial-danger';
       statusText = 'AWARIA';
       animate = true;
+      break;
+    default:
+      // Case for undefined/null status
+      statusColor = 'bg-gray-600';
+      statusText = 'BRAK DANYCH';
       break;
   }
 
